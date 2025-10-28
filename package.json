@@ -1,0 +1,24 @@
+{
+  "name": "react-to-prasso-converter",
+  "version": "1.0.0",
+  "description": "Convert React app pages to Prasso site_pages SQL",
+  "main": "dist/cli.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "dev": "ts-node src/cli.ts",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "keywords": ["prasso", "converter", "sql"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "typescript": "^5.3.3",
+    "ts-node": "^10.9.2"
+  }
+}
