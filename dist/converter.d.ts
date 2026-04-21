@@ -7,8 +7,8 @@ export interface ConvertedPage {
     requiresLogin: boolean;
 }
 /**
- * Convert React JSX to semantic HTML
- * This is a simplified converter that extracts text and structure
+ * Convert React JSX to semantic HTML.
+ * Expects component.content to already be the JSX body (extracted by parser).
  */
 export declare function convertJSXToHTML(component: PageComponent): string;
 /**

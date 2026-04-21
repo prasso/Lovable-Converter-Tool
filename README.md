@@ -50,6 +50,13 @@ node dist/cli.js convert \
   --output connect-and-care.sql
 ```
 
+```bash
+node dist/cli.js convert \
+  --folder /Users/bobbiperreault/Sourcecode/faxt/prasso/working-apps/faith-connect-hub \
+  --site-id 20 \
+  --output faith-connect-hub.sql
+```
+
 ## Output
 
 The tool generates SQL INSERT statements for each page found in `src/pages/`:

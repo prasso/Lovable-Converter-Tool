@@ -1,7 +1,10 @@
 export interface PageComponent {
     name: string;
     filePath: string;
+    /** Extracted JSX body of the component (what gets converted to HTML). */
     content: string;
+    /** Full raw source of the .tsx file (used to resolve data arrays referenced by .map()). */
+    rawContent: string;
     route?: string;
     title?: string;
 }
@@ -13,6 +16,10 @@ export interface RouteMapping {
  * Parse App.tsx to extract route mappings
  */
 export declare function parseRoutes(appTsxPath: string): Map<string, RouteMapping>;
+/**
+ * Parse TanStack Router routes from route files
+ */
+export declare function parseTanStackRoutes(routesDir: string): Map<string, RouteMapping>;
 /**
  * Extract all page components from src/pages directory
  */

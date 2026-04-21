@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { program } from 'commander';
 import { parseAllPages } from './parser.js';
+import { convertPageToRecord } from './converter.js';
 import { generateSQL, generateSQLWithTransaction } from './sqlGenerator.js';
 import { writeFile, pathExists } from './utils/fileUtils.js';
 /**
@@ -58,15 +59,9 @@ async function convertCommand(options) {
     pages.forEach(page => {
         console.log(`   - ${page.name} (${page.route})`);
     });
-    // Convert pages
+    // Convert pages (extracts JSX and cleans it into HTML)
     console.log('🔄 Converting to database records...');
-    const convertedPages = pages.map(page => ({
-        name: page.name,
-        title: page.title || page.name,
-        route: page.route || `/${page.name.toLowerCase()}`,
-        html: page.content, // Use original content for now
-        requiresLogin: page.name !== 'NotFound' && page.name !== 'Index',
-    }));
+    const convertedPages = pages.map(page => convertPageToRecord(page, siteId));
     // Generate SQL
     console.log('💾 Generating SQL...');
     const sql = transaction
