@@ -1,8 +1,14 @@
 # React to Prasso Converter
 
-Convert React app pages to SQL INSERT statements for Prasso site_pages table.
+A command-line tool that converts React application pages into SQL INSERT statements for the Prasso site_pages table. Automatically parses React components from src/pages/, extracts routes from App.tsx, converts JSX to HTML, and generates properly escaped SQL for database insertion.
 
-The react app has been created at lovable.dev
+Features:
+
+Parse React pages and routes
+Convert JSX to HTML
+Generate SQL INSERT statements with proper escaping
+Support for dry-run mode and transaction wrapping
+Configurable output (stdout or file)
 
 ## Installation
 
