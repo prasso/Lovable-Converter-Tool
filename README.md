@@ -62,7 +62,12 @@ node dist/cli.js convert \
   --site-id 20 \
   --output faith-connect-hub.sql
 ```
-
+```bash
+node dist/cli.js convert \
+  --folder /Users/bobbiperreault/Sourcecode/faxt/prasso/working-apps/my-sweet-projects \
+  --site-id 20 \
+  --output my-sweet-projects.sql
+```
 ## Output
 
 The tool generates SQL INSERT statements for each page found in `src/pages/`:

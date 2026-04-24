@@ -81,7 +81,7 @@ async function convertCommand(options: CLIOptions) {
 
   // Convert pages (extracts JSX and cleans it into HTML)
   console.log('🔄 Converting to database records...');
-  const convertedPages = pages.map(page => convertPageToRecord(page, siteId));
+  const convertedPages = pages.map(page => convertPageToRecord(page, siteId, folder));
 
   // Generate SQL
   console.log('💾 Generating SQL...');

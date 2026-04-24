@@ -10,7 +10,7 @@ export interface ConvertedPage {
  * Convert React JSX to semantic HTML.
  * Expects component.content to already be the JSX body (extracted by parser).
  */
-export declare function convertJSXToHTML(component: PageComponent): string;
+export declare function convertJSXToHTML(component: PageComponent, appDir?: string): string;
 /**
  * Extract plain text from JSX for preview
  */
@@ -18,7 +18,7 @@ export declare function extractTextFromJSX(content: string): string;
 /**
  * Convert page component to database record format
  */
-export declare function convertPageToRecord(component: PageComponent, siteId: number): ConvertedPage;
+export declare function convertPageToRecord(component: PageComponent, siteId: number, appDir?: string): ConvertedPage;
 /**
  * Generate section name from component name
  */
