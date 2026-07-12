@@ -68,6 +68,12 @@ node dist/cli.js convert \
   --site-id 20 \
   --output my-sweet-projects.sql
 ```
+node dist/cli.js convert \
+  --folder /Users/bobbiperreault/Sourcecode/faxt/family-recovery-link \
+  --site-id XXX \
+  --output family-recovery-link.sql
+
+
 ## Output
 
 The tool generates SQL INSERT statements for each page found in `src/pages/`:

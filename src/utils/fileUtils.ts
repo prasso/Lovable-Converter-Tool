@@ -31,14 +31,21 @@ export function pathExists(filePath: string): boolean {
 }
 
 /**
- * Get all TypeScript/TSX files in a directory
+ * Get all TypeScript/TSX files in a directory (recursive)
  */
 export function getTSXFiles(dirPath: string): string[] {
   try {
-    const files = readdirSync(dirPath);
-    return files
-      .filter(file => extname(file) === '.tsx' || extname(file) === '.ts')
-      .map(file => join(dirPath, file));
+    const entries = readdirSync(dirPath, { withFileTypes: true });
+    const results: string[] = [];
+    for (const entry of entries) {
+      const fullPath = join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        results.push(...getTSXFiles(fullPath));
+      } else if (extname(entry.name) === '.tsx' || extname(entry.name) === '.ts') {
+        results.push(fullPath);
+      }
+    }
+    return results;
   } catch (error) {
     throw new Error(`Failed to read directory ${dirPath}: ${error}`);
   }

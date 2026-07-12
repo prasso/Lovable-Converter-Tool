@@ -1,5 +1,5 @@
 import { readFile, getTSXFiles, getFileNameWithoutExt } from './utils/fileUtils.js';
-import { join } from 'path';
+import { join, relative } from 'path';
 
 export interface PageComponent {
   name: string;
@@ -10,6 +10,8 @@ export interface PageComponent {
   rawContent: string;
   route?: string;
   title?: string;
+  /** True when the file lives under an _authenticated (or similar) subdirectory */
+  isAuthenticated?: boolean;
 }
 
 export interface RouteMapping {
@@ -46,6 +48,8 @@ export function parseTanStackRoutes(routesDir: string): Map<string, RouteMapping
 
   for (const filePath of files) {
     const content = readFile(filePath);
+    // Use relative path (without extension) as the key to avoid basename collisions
+    const relPath = relative(routesDir, filePath).replace(/\.[^.]+$/, '');
     const name = getFileNameWithoutExt(filePath);
 
     // Match createFileRoute patterns: export const Route = createFileRoute("/")({ ... })
@@ -54,10 +58,10 @@ export function parseTanStackRoutes(routesDir: string): Map<string, RouteMapping
 
     if (match) {
       const path = match[1];
-      routeMap.set(name, { path, component: name });
+      routeMap.set(relPath, { path, component: name });
     } else {
       // Default route based on file name
-      routeMap.set(name, { path: `/${name.toLowerCase()}`, component: name });
+      routeMap.set(relPath, { path: `/${name.toLowerCase()}`, component: name });
     }
   }
 
@@ -126,7 +130,7 @@ function extractJSXContent(fileContent: string): string {
 }
 
 /**
- * Extract all page components from src/pages directory
+ * Extract all page components from src/pages or src/routes directory
  */
 export function extractPageComponents(pagesDir: string): PageComponent[] {
   const files = getTSXFiles(pagesDir);
@@ -135,15 +139,20 @@ export function extractPageComponents(pagesDir: string): PageComponent[] {
   for (const filePath of files) {
     const content = readFile(filePath);
     const name = getFileNameWithoutExt(filePath);
+    // Relative key used for route map lookup (preserves subdirectory info)
+    const relKey = relative(pagesDir, filePath).replace(/\.[^.]+$/, '');
+    // Detect _authenticated (or similar protected) subdirectories by path segment
+    const isAuthenticated = filePath.split('/').some(seg => seg.startsWith('_authenticated'));
 
     // Extract just the JSX content, not the entire file
     const jsxContent = extractJSXContent(content);
 
     components.push({
-      name,
+      name: relKey,
       filePath,
       content: jsxContent,
       rawContent: content,
+      isAuthenticated,
     });
   }
 
@@ -243,10 +252,13 @@ export function parseAllPages(appDir: string): PageComponent[] {
   return components.map(comp => {
     const route = routeMap.get(comp.name);
     const title = extractTitleFromComponent(comp.content);
+    // Use the basename for display; the relKey is only needed for route lookup
+    const displayName = getFileNameWithoutExt(comp.filePath);
 
     return {
       ...comp,
-      route: route?.path || `/${comp.name.toLowerCase()}`,
+      name: displayName,
+      route: route?.path || `/${displayName.toLowerCase()}`,
       title,
     };
   });

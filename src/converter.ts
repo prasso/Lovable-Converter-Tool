@@ -506,7 +506,8 @@ export function convertPageToRecord(
   appDir?: string
 ): ConvertedPage {
   const html = convertJSXToHTML(component, appDir);
-  const requiresLogin = component.name !== 'NotFound' && component.name !== 'Index';
+  const requiresLogin = component.isAuthenticated === true ||
+    (component.name !== 'NotFound' && component.name !== 'Index' && component.name !== '__root' && component.name !== 'auth');
 
   return {
     name: component.name,
