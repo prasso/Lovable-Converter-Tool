@@ -30,12 +30,16 @@ export interface SitePageRecord {
  * Generate a section name from component name
  */
 function generateSection(componentName: string): string {
-  return componentName
+  const section = componentName
     .replace(/([A-Z])/g, ' $1')
     .trim()
     .split(' ')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
+
+  if (section === 'Index') return 'Welcome';
+  if (section === 'Home') return 'Dashboard';
+  return section;
 }
 
 /**
@@ -119,7 +123,13 @@ export function generateInsertStatement(record: SitePageRecord): string {
 /**
  * Generate SQL for all pages
  */
-export function generateSQL(pages: ConvertedPage[], siteId: number): string {
+function generateSiteCssUpdate(siteId: number, css: string): string {
+  const cssValue = escapeSQLString(`\n${css}`);
+  const markerValue = escapeSQLString('%prasso-converter-shadcn-theme%');
+  return `UPDATE sites\nSET app_specific_css = CONCAT(COALESCE(app_specific_css, ''), ${cssValue})\nWHERE id = ${escapeSQLInt(siteId)}\n  AND COALESCE(app_specific_css, '') NOT LIKE ${markerValue};`;
+}
+
+export function generateSQL(pages: ConvertedPage[], siteId: number, siteCss?: string | null): string {
   const statements: string[] = [];
 
   // Add header comment
@@ -128,6 +138,11 @@ export function generateSQL(pages: ConvertedPage[], siteId: number): string {
   statements.push(`-- Generated: ${new Date().toISOString()}`);
   statements.push('-- WARNING: Review before executing in production');
   statements.push('');
+
+  if (siteCss) {
+    statements.push(generateSiteCssUpdate(siteId, siteCss));
+    statements.push('');
+  }
 
   // Generate INSERT for each page
   for (const page of pages) {
@@ -146,8 +161,8 @@ export function generateSQL(pages: ConvertedPage[], siteId: number): string {
 /**
  * Generate SQL with transaction wrapper
  */
-export function generateSQLWithTransaction(pages: ConvertedPage[], siteId: number): string {
-  const sql = generateSQL(pages, siteId);
+export function generateSQLWithTransaction(pages: ConvertedPage[], siteId: number, siteCss?: string | null): string {
+  const sql = generateSQL(pages, siteId, siteCss);
 
   return `BEGIN TRANSACTION;
 

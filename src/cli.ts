@@ -4,6 +4,7 @@ import { program } from 'commander';
 import { parseAllPages } from './parser.js';
 import { convertPageToRecord } from './converter.js';
 import { generateSQL, generateSQLWithTransaction } from './sqlGenerator.js';
+import { generateShadcnThemeCSS } from './themeCss.js';
 import { writeFile, pathExists } from './utils/fileUtils.js';
 
 interface CLIOptions {
@@ -85,9 +86,10 @@ async function convertCommand(options: CLIOptions) {
 
   // Generate SQL
   console.log('💾 Generating SQL...');
+  const siteCss = generateShadcnThemeCSS(folder);
   const sql = transaction
-    ? generateSQLWithTransaction(convertedPages, siteId)
-    : generateSQL(convertedPages, siteId);
+    ? generateSQLWithTransaction(convertedPages, siteId, siteCss)
+    : generateSQL(convertedPages, siteId, siteCss);
 
   // Output
   if (dryRun) {

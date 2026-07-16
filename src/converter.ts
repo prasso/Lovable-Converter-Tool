@@ -148,6 +148,71 @@ function expandMapExpressions(jsx: string, rawSource: string): string {
   return out;
 }
 
+function expandInlineArrayMapExpressions(jsx: string): string {
+  let out = '';
+  let cursor = 0;
+
+  while (cursor < jsx.length) {
+    const start = jsx.indexOf('{[', cursor);
+    if (start === -1) {
+      out += jsx.slice(cursor);
+      break;
+    }
+
+    const arrayOpen = start + 1;
+    const arrayClose = findMatchingBracket(jsx, arrayOpen, '[', ']');
+    if (arrayClose === -1) {
+      out += jsx.slice(cursor, start + 2);
+      cursor = start + 2;
+      continue;
+    }
+
+    const mapMatch = /^\s*\.map\s*\(\s*\(\s*(\w+)(?:\s*,\s*\w+)?\s*\)\s*=>\s*\(/.exec(jsx.slice(arrayClose + 1));
+    if (!mapMatch) {
+      out += jsx.slice(cursor, arrayClose + 1);
+      cursor = arrayClose + 1;
+      continue;
+    }
+
+    const paramName = mapMatch[1];
+    const templateOpen = arrayClose + 1 + mapMatch[0].length - 1;
+    const templateClose = findMatchingBracket(jsx, templateOpen, '(', ')');
+    if (templateClose === -1) {
+      out += jsx.slice(cursor, start + 2);
+      cursor = start + 2;
+      continue;
+    }
+
+    let end = templateClose + 1;
+    while (end < jsx.length && /\s/.test(jsx[end])) end++;
+    if (jsx[end] !== ')') {
+      out += jsx.slice(cursor, start + 2);
+      cursor = start + 2;
+      continue;
+    }
+    end++;
+    while (end < jsx.length && /\s/.test(jsx[end])) end++;
+    if (jsx[end] !== '}') {
+      out += jsx.slice(cursor, start + 2);
+      cursor = start + 2;
+      continue;
+    }
+
+    const items = parseObjectArrayItems(jsx.slice(arrayOpen + 1, arrayClose));
+    if (items.length === 0) {
+      out += jsx.slice(cursor, start + 2);
+      cursor = start + 2;
+      continue;
+    }
+
+    const template = jsx.slice(templateOpen + 1, templateClose);
+    out += jsx.slice(cursor, start) + items.map(item => substituteItem(template, paramName, item)).join('\n');
+    cursor = end + 1;
+  }
+
+  return out;
+}
+
 function substituteItem(
   template: string,
   paramName: string,
@@ -310,44 +375,85 @@ function expandCustomComponents(jsx: string, appDir: string): string {
  * Convert UI components to their underlying HTML elements
  * This is a post-processing step that handles remaining UI components
  */
+function componentAttributes(attrs: string, classes: string, remove: string[] = []): string {
+  const classMatch = attrs.match(/\s+className=(?:"([^"]*)"|'([^']*)')/);
+  const existingClasses = classMatch?.[1] ?? classMatch?.[2] ?? '';
+  let output = attrs.replace(/\s+className=(?:"[^"]*"|'[^']*')/g, '');
+
+  for (const prop of remove) {
+    output = output.replace(new RegExp(`\\s+${prop}=(?:"[^"]*"|'[^']*'|\\{[^}]*\\})`, 'g'), '');
+  }
+
+  return ` className="${[classes, existingClasses].filter(Boolean).join(' ')}"${output}`;
+}
+
 function convertUIComponentsToHTML(html: string): string {
-  // Convert <Input ... /> to <input ... />
-  html = html.replace(/<Input\b([^>]*)\/>/g, '<input$1/>');
-  
-  // Convert <Button ... /> to <button ... ></button>
-  html = html.replace(/<Button\b([^>]*)\/>/g, '<button$1></button>');
-  
-  // Convert <Button ...>...</Button> to <button ...>...</button>
-  html = html.replace(/<Button\b/g, '<button');
-  html = html.replace(/<\/Button>/g, '</button>');
-  
-  // Convert <Label ... /> to <label ... ></label>
-  html = html.replace(/<Label\b([^>]*)\/>/g, '<label$1></label>');
-  
-  // Convert <Label ...>...</Label> to <label ...>...</label>
-  html = html.replace(/<Label\b/g, '<label');
-  html = html.replace(/<\/Label>/g, '</label>');
-  
-  // Convert <Textarea ... /> to <textarea ... ></textarea>
+  const cardClasses = 'rounded-xl border bg-card text-card-foreground shadow';
+  const inputClasses = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm';
+  const labelClasses = 'text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70';
+  const buttonBaseClasses = 'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed';
+  const buttonVariants: Record<string, string> = {
+    default: 'bg-primary text-primary-foreground shadow hover:bg-primary/90',
+    destructive: 'bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90',
+    outline: 'border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground',
+    secondary: 'bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80',
+    ghost: 'hover:bg-accent hover:text-accent-foreground',
+    link: 'text-primary underline-offset-4 hover:underline',
+  };
+  const buttonSizes: Record<string, string> = {
+    default: 'h-9 px-4 py-2',
+    sm: 'h-8 rounded-md px-3 text-xs',
+    lg: 'h-10 rounded-md px-8',
+    icon: 'h-9 w-9',
+  };
+
+  html = html.replace(/<Card\b([^>]*)>([\s\S]*?)<\/Card>/g, (_match, attrs: string, content: string) =>
+    `<div${componentAttributes(attrs, cardClasses)}>${content}</div>`);
+  html = html.replace(/<Card\b([^>]*)\/>/g, (_match, attrs: string) =>
+    `<div${componentAttributes(attrs, cardClasses)}></div>`);
+  html = html.replace(/<Input\b([^>]*)\/>/g, (_match, attrs: string) =>
+    `<input${componentAttributes(attrs, inputClasses)} />`);
+  html = html.replace(/<Label\b([^>]*)>([\s\S]*?)<\/Label>/g, (_match, attrs: string, content: string) =>
+    `<label${componentAttributes(attrs, labelClasses)}>${content}</label>`);
+  html = html.replace(/<Label\b([^>]*)\/>/g, (_match, attrs: string) =>
+    `<label${componentAttributes(attrs, labelClasses)}></label>`);
+  html = html.replace(/<Button\b([^>]*)>([\s\S]*?)<\/Button>/g, (_match, attrs: string, content: string) => {
+    const variant = attrs.match(/\s+variant=["']([^"']+)["']/)?.[1] ?? 'default';
+    const size = attrs.match(/\s+size=["']([^"']+)["']/)?.[1] ?? 'default';
+    const classes = [buttonBaseClasses, buttonVariants[variant] ?? buttonVariants.default, buttonSizes[size] ?? buttonSizes.default].join(' ');
+    return `<button${componentAttributes(attrs, classes, ['variant', 'size', 'asChild'])}>${content}</button>`;
+  });
+  html = html.replace(/<Button\b([^>]*)\/>/g, (_match, attrs: string) => {
+    const variant = attrs.match(/\s+variant=["']([^"']+)["']/)?.[1] ?? 'default';
+    const size = attrs.match(/\s+size=["']([^"']+)["']/)?.[1] ?? 'default';
+    const classes = [buttonBaseClasses, buttonVariants[variant] ?? buttonVariants.default, buttonSizes[size] ?? buttonSizes.default].join(' ');
+    return `<button${componentAttributes(attrs, classes, ['variant', 'size', 'asChild'])}></button>`;
+  });
   html = html.replace(/<Textarea\b([^>]*)\/>/g, '<textarea$1></textarea>');
-  
-  // Convert <Textarea ...>...</Textarea> to <textarea ...>...</textarea>
   html = html.replace(/<Textarea\b/g, '<textarea');
   html = html.replace(/<\/Textarea>/g, '</textarea>');
-  
-  // Convert <Switch ... /> to <input type="checkbox" ... />
   html = html.replace(/<Switch\b([^>]*)\/>/g, '<input type="checkbox"$1/>');
-  
-  // Convert <Checkbox ... /> to <input type="checkbox" ... />
   html = html.replace(/<Checkbox\b([^>]*)\/>/g, '<input type="checkbox"$1/>');
-  
-  // Convert <Check ... /> to a simple span (lucide-react icon)
   html = html.replace(/<Check\b([^>]*)\/>/g, '<span$1></span>');
-  
-  // Convert <Loader2 ... /> to a simple span (lucide-react icon)
   html = html.replace(/<Loader2\b([^>]*)\/>/g, '<span$1></span>');
-  
+
   return html;
+}
+
+function renderStaticExpressions(html: string, rawSource: string): string {
+  const values = new Map<string, string | boolean>();
+  const stateRegex = /const\s+\[\s*(\w+)\s*,[^\]]*\]\s*=\s*useState(?:<[^>]*>)?\(\s*(?:(["'])(.*?)\2|(true|false))\s*\)/g;
+  let stateMatch: RegExpExecArray | null;
+
+  while ((stateMatch = stateRegex.exec(rawSource)) !== null) {
+    values.set(stateMatch[1], stateMatch[3] ?? stateMatch[4] === 'true');
+  }
+
+  return html.replace(/\{\s*(\w+)\s*===\s*(["'])(.*?)\2\s*\?\s*(["'])(.*?)\4\s*:\s*(["'])(.*?)\6\s*\}/g, (_match, name: string, _quote: string, expected: string, _trueQuote: string, whenTrue: string, _falseQuote: string, whenFalse: string) => {
+    const value = values.get(name);
+    return value === expected ? whenTrue : whenFalse;
+  }).replace(/\{\s*(\w+)\s*\?\s*(["'])(.*?)\2\s*:\s*(["'])(.*?)\4\s*\}/g, (_match, name: string, _trueQuote: string, whenTrue: string, _falseQuote: string, whenFalse: string) =>
+    values.get(name) === true ? whenTrue : whenFalse);
 }
 
 /**
@@ -407,18 +513,23 @@ export function convertJSXToHTML(component: PageComponent, appDir?: string): str
 
   let html = jsxContent;
 
+  html = html.replace(/\s+on(?:Click|Change|Submit|CheckedChange)=\{(?:[^{}]|\{[^{}]*\})*\}/g, '');
+
+  // Convert UI components to HTML elements
+  html = convertUIComponentsToHTML(html);
+
   // Expand custom components like <GuestSignInForm /> by finding their source files
   if (appDir) {
     html = expandCustomComponents(html, appDir);
   }
 
-  // Convert UI components to HTML elements
-  html = convertUIComponentsToHTML(html);
+  html = expandInlineArrayMapExpressions(html);
 
   // Expand {arr.map((item) => ( <tpl/> ))} by reading `const arr = [...]`
   // from the raw source and cloning the template per item.
   if (component.rawContent) {
     html = expandMapExpressions(html, component.rawContent);
+    html = renderStaticExpressions(html, component.rawContent);
   }
 
   // Strip JSX comments: {/* ... */}
@@ -459,6 +570,8 @@ export function convertJSXToHTML(component: PageComponent, appDir?: string): str
   // e.g. "(action, i) => (" or ")) " outside tags
   html = html.replace(/\(\s*[a-zA-Z_][\w,\s]*\)\s*=>\s*\(/g, '');
   html = html.replace(/\)\s*\)/g, '');
+
+  html = html.replace(/<[a-z]\.[A-Za-z][\w.]*\b[^>]*\/?\s*>/g, '');
 
   // Convert self-closing non-void tags (e.g. <span />) to paired tags
   const voidTags = new Set(['img', 'br', 'hr', 'input', 'meta', 'link', 'area', 'base', 'col', 'embed', 'source', 'track', 'wbr']);
