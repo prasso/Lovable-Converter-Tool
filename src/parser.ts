@@ -1,4 +1,4 @@
-import { readFile, getTSXFiles, getFileNameWithoutExt } from './utils/fileUtils.js';
+import { readFile, getTSXFiles, getFileNameWithoutExt, pathExists } from './utils/fileUtils.js';
 import { join, relative } from 'path';
 
 export interface PageComponent {
@@ -174,13 +174,16 @@ export function extractTitleFromComponent(content: string): string {
     return h2Match[1].trim();
   }
 
-  // Fallback to component name
-  const componentMatch = content.match(/const\s+(\w+)\s*=/);
-  if (componentMatch) {
-    return componentMatch[1];
-  }
-
   return 'Untitled';
+}
+
+function extractIndexHtmlTitle(appDir: string): string | null {
+  const indexPath = join(appDir, 'index.html');
+  if (!pathExists(indexPath)) return null;
+
+  const html = readFile(indexPath);
+  const titleMatch = html.match(/<title>([^<]*)<\/title>/);
+  return titleMatch ? titleMatch[1].trim() : null;
 }
 
 /**
@@ -248,16 +251,22 @@ export function parseAllPages(appDir: string): PageComponent[] {
     }
   }
 
+  const siteTitle = extractIndexHtmlTitle(appDir);
+
   // Enrich components with metadata
   return components.map(comp => {
     const route = routeMap.get(comp.name);
-    const title = extractTitleFromComponent(comp.content);
-    // Use the basename for display; the relKey is only needed for route lookup
     const displayName = getFileNameWithoutExt(comp.filePath);
+    const isRoot = route?.path === '/';
+    const name = isRoot ? 'Index' : displayName;
+    let title = extractTitleFromComponent(comp.content);
+    if (isRoot && siteTitle && (!title || title === 'Untitled')) {
+      title = siteTitle;
+    }
 
     return {
       ...comp,
-      name: displayName,
+      name,
       route: route?.path || `/${displayName.toLowerCase()}`,
       title,
     };

@@ -68,11 +68,19 @@ node dist/cli.js convert \
   --site-id 20 \
   --output my-sweet-projects.sql
 ```
+```bash
 node dist/cli.js convert \
   --folder /Users/bobbiperreault/Sourcecode/faxt/family-recovery-link \
   --site-id XXX \
   --output family-recovery-link.sql
+```
+```bash
+node dist/cli.js convert \
+  --folder /Users/bobbiperreault/Sourcecode/faxt/vallartainfo.com/tours.vallartainfo.com \
+  --site-id 47 \
+  --output tours.vallartainfo.com.sql
 
+```
 
 ## Output
 

@@ -24,22 +24,46 @@ export interface SitePageRecord {
   type: number;
   external_url: string | null;
   is_published: boolean;
+  meta_title: string | null;
+  meta_description: string | null;
+  meta_og_type: string | null;
+  meta_og_image: string | null;
+  meta_twitter_card: string | null;
+  meta_twitter_title: string | null;
 }
 
 /**
- * Generate a section name from component name
+ * Generate a display title from component name
  */
-function generateSection(componentName: string): string {
-  const section = componentName
+function generateTitle(componentName: string): string {
+  const title = componentName
     .replace(/([A-Z])/g, ' $1')
     .trim()
     .split(' ')
     .map(word => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
 
-  if (section === 'Index') return 'Welcome';
-  if (section === 'Home') return 'Dashboard';
-  return section;
+  if (title === 'Index') return 'Welcome';
+  if (title === 'Home') return 'Dashboard';
+  return title;
+}
+
+/**
+ * Generate a lowercase, space-free section identifier unique to this site
+ */
+function generateSection(componentName: string, usedSections: Set<string>): string {
+  let section = componentName.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+  if (section === 'index') section = 'welcome';
+  if (section === 'home') section = 'dashboard';
+  if (!section) section = 'page';
+
+  let unique = section;
+  let suffix = 2;
+  while (usedSections.has(unique)) {
+    unique = `${section}${suffix++}`;
+  }
+  usedSections.add(unique);
+  return unique;
 }
 
 /**
@@ -47,14 +71,17 @@ function generateSection(componentName: string): string {
  */
 export function convertPageToRecord(
   page: ConvertedPage,
-  siteId: number
+  siteId: number,
+  usedSections: Set<string> = new Set()
 ): SitePageRecord {
   return {
     fk_site_id: siteId,
-    section: generateSection(page.name),
-    title: page.title,
+    section: generateSection(page.name, usedSections),
+    title: page.title && page.title.trim() && page.title !== 'Untitled'
+      ? page.title
+      : generateTitle(page.name),
     description: page.html,
-    url: page.route.replace(/^\//, ''), // Remove leading slash
+    url: '',
     headers: '',
     masterpage: 'sitepage.templates.blankpage',
     template: 'sitepage.templates.blankpage',
@@ -67,6 +94,12 @@ export function convertPageToRecord(
     type: 1, // HTML content
     external_url: null,
     is_published: true,
+    meta_title: page.meta_title,
+    meta_description: page.meta_description,
+    meta_og_type: page.meta_og_type,
+    meta_og_image: page.meta_og_image,
+    meta_twitter_card: page.meta_twitter_card,
+    meta_twitter_title: page.meta_twitter_title,
   };
 }
 
@@ -92,6 +125,12 @@ export function generateInsertStatement(record: SitePageRecord): string {
     'type',
     'external_url',
     'is_published',
+    'meta_title',
+    'meta_description',
+    'meta_og_type',
+    'meta_og_image',
+    'meta_twitter_card',
+    'meta_twitter_title',
   ];
 
   const values = [
@@ -112,12 +151,21 @@ export function generateInsertStatement(record: SitePageRecord): string {
     escapeSQLInt(record.type),
     record.external_url ? escapeSQLString(record.external_url) : 'NULL',
     escapeSQLBoolean(record.is_published),
+    escapeSQLString(record.meta_title),
+    escapeSQLString(record.meta_description),
+    escapeSQLString(record.meta_og_type),
+    escapeSQLString(record.meta_og_image),
+    escapeSQLString(record.meta_twitter_card),
+    escapeSQLString(record.meta_twitter_title),
   ];
 
   const columnList = columns.join(', ');
   const valueList = values.join(', ');
 
-  return `INSERT INTO site_pages (${columnList})\nVALUES (${valueList});`;
+  const updateColumns = columns.filter(col => col !== 'fk_site_id' && col !== 'section');
+  const updateClause = updateColumns.map(col => `${col}=VALUES(${col})`).join(', ');
+
+  return `INSERT INTO site_pages (${columnList})\nVALUES (${valueList})\nON DUPLICATE KEY UPDATE\n${updateClause};`;
 }
 
 /**
@@ -145,8 +193,9 @@ export function generateSQL(pages: ConvertedPage[], siteId: number, siteCss?: st
   }
 
   // Generate INSERT for each page
+  const usedSections = new Set<string>();
   for (const page of pages) {
-    const record = convertPageToRecord(page, siteId);
+    const record = convertPageToRecord(page, siteId, usedSections);
     const insert = generateInsertStatement(record);
     statements.push(insert);
     statements.push('');

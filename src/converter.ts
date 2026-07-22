@@ -1,6 +1,10 @@
 import { PageComponent } from './parser.js';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
+import { getTSXFiles } from './utils/fileUtils.js';
+import { replaceTranslationExpressions } from './i18nResolver.js';
+import { extractSeoFromHelmet, type SeoData } from './seoExtractor.js';
+import { convertEventHandlersToAlpine, processAlpineConversion } from './alpineGenerator.js';
 
 export interface ConvertedPage {
   name: string;
@@ -8,6 +12,12 @@ export interface ConvertedPage {
   route: string;
   html: string;
   requiresLogin: boolean;
+  meta_title: string | null;
+  meta_description: string | null;
+  meta_og_type: string | null;
+  meta_og_image: string | null;
+  meta_twitter_card: string | null;
+  meta_twitter_title: string | null;
 }
 
 /**
@@ -242,8 +252,26 @@ function substituteItem(
 function stripBracedExpressions(input: string): string {
   let out = '';
   let depth = 0;
+  let strChar: string | null = null;
   for (let i = 0; i < input.length; i++) {
     const ch = input[i];
+    if (strChar) {
+      if (ch === '\\') { i++; continue; }
+      if (ch === strChar) { strChar = null; }
+      // Any string inside a JSX expression (depth > 0) should be removed with the expression.
+      if (depth > 0) {
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      strChar = ch;
+      if (depth === 0) {
+        out += ch;
+      }
+      continue;
+    }
     if (ch === '{') {
       depth++;
       continue;
@@ -262,10 +290,9 @@ function stripBracedExpressions(input: string): string {
 }
 
 /**
- * Find a component file by name in common directories
+ * Find a component file by name in common directories (recursively through src/components)
  */
 function findComponentFile(appDir: string, componentName: string): string | null {
-  // Common component directories
   const searchDirs = [
     join(appDir, 'src/components'),
     join(appDir, 'src/components/ui'),
@@ -276,13 +303,11 @@ function findComponentFile(appDir: string, componentName: string): string | null
   for (const dir of searchDirs) {
     if (!existsSync(dir)) continue;
     
-    const files = readdirSync(dir, { withFileTypes: true });
-    for (const file of files) {
-      if (!file.isFile()) continue;
-      
-      const baseName = file.name.replace(/\.(tsx?|jsx?)$/, '');
+    const files = getTSXFiles(dir);
+    for (const filePath of files) {
+      const baseName = filePath.split('/').pop()?.replace(/\.(tsx?|jsx?)$/, '') ?? '';
       if (baseName === componentName) {
-        return join(dir, file.name);
+        return filePath;
       }
     }
   }
@@ -310,6 +335,12 @@ function extractComponentJSX(filePath: string): string {
     }
   }
   
+  // Components that use a bare return with a self-closing JSX element
+  const bareReturnMatch = content.match(/\breturn\s+(<([A-Za-z][\w.]*)[^>]*\/>)\s*;?/);
+  if (bareReturnMatch) {
+    return bareReturnMatch[1];
+  }
+  
   // Fallback: find any top-level JSX-looking block
   const jsxMatch = content.match(/<([A-Za-z][\w.]*)[^>]*>[\s\S]*<\/\1>/);
   if (jsxMatch) {
@@ -323,9 +354,13 @@ function extractComponentJSX(filePath: string): string {
  * Expand custom component references like <GuestSignInForm /> by finding their source files
  * and replacing them with their JSX content
  */
+const svgTags = new Set(['svg', 'path', 'circle', 'rect', 'polygon', 'line', 'polyline', 'ellipse', 'g', 'defs', 'clipPath', 'use', 'symbol', 'image', 'pattern', 'mask', 'filter', 'feGaussianBlur', 'feBlend', 'animate', 'animateTransform', 'text', 'tspan', 'foreignObject']);
+
+function isShadcnUIPath(filePath: string): boolean {
+  return filePath.includes('/ui/') || filePath.includes('/shadcn/');
+}
+
 function expandCustomComponents(jsx: string, appDir: string): string {
-  // Match both self-closing and paired component tags
-  // This regex matches: <ComponentName ...attrs /> or <ComponentName ...attrs>...</ComponentName>
   const componentRegex = /<([A-Z][a-zA-Z0-9]*)(?:\s[^>]*)?\s*\/?>(?:[\s\S]*?<\/\1>)?/g;
   let out = '';
   let lastEnd = 0;
@@ -335,26 +370,16 @@ function expandCustomComponents(jsx: string, appDir: string): string {
     const componentName = match[1];
     const fullMatch = match[0];
     
-    // Skip known HTML elements and special components
-    if (['svg', 'path', 'circle', 'rect', 'polygon', 'line', 'polyline', 'ellipse', 'g', 'defs', 'clipPath', 'use', 'symbol', 'image', 'pattern', 'mask', 'filter', 'feGaussianBlur', 'feBlend', 'animate', 'animateTransform', 'text', 'tspan', 'foreignObject'].includes(componentName.toLowerCase())) {
+    if (svgTags.has(componentName.toLowerCase())) {
       out += jsx.slice(lastEnd, match.index) + fullMatch;
       lastEnd = match.index + fullMatch.length;
       continue;
     }
     
-    // Handle common UI components by converting them to their underlying elements
-    const uiComponentExpansion = expandUIComponent(fullMatch, componentName);
-    if (uiComponentExpansion) {
-      out += jsx.slice(lastEnd, match.index) + uiComponentExpansion;
-      lastEnd = match.index + fullMatch.length;
-      continue;
-    }
-    
     const componentFile = findComponentFile(appDir, componentName);
-    if (componentFile) {
+    if (componentFile && !isShadcnUIPath(componentFile)) {
       const componentJSX = extractComponentJSX(componentFile);
       if (componentJSX) {
-        // Recursively expand nested components
         const expandedJSX = expandCustomComponents(componentJSX, appDir);
         out += jsx.slice(lastEnd, match.index) + expandedJSX;
         lastEnd = match.index + fullMatch.length;
@@ -362,13 +387,12 @@ function expandCustomComponents(jsx: string, appDir: string): string {
       }
     }
     
-    // If we can't expand it, keep the original
     out += jsx.slice(lastEnd, match.index) + fullMatch;
     lastEnd = match.index + fullMatch.length;
   }
   
   out += jsx.slice(lastEnd);
-  return out;
+  return convertUIComponentsToHTML(out);
 }
 
 /**
@@ -407,10 +431,39 @@ function convertUIComponentsToHTML(html: string): string {
     icon: 'h-9 w-9',
   };
 
+  const cardHeaderClasses = 'flex flex-col space-y-1.5 p-6';
+  const cardTitleClasses = 'font-semibold leading-none tracking-tight';
+  const cardDescriptionClasses = 'text-sm text-muted-foreground';
+  const cardContentClasses = 'p-6 pt-0';
+  const cardFooterClasses = 'flex items-center p-6 pt-0';
+  const skeletonClasses = 'animate-pulse rounded-md bg-muted';
+
   html = html.replace(/<Card\b([^>]*)>([\s\S]*?)<\/Card>/g, (_match, attrs: string, content: string) =>
     `<div${componentAttributes(attrs, cardClasses)}>${content}</div>`);
   html = html.replace(/<Card\b([^>]*)\/>/g, (_match, attrs: string) =>
     `<div${componentAttributes(attrs, cardClasses)}></div>`);
+  html = html.replace(/<CardHeader\b([^>]*)>([\s\S]*?)<\/CardHeader>/g, (_match, attrs: string, content: string) =>
+    `<div${componentAttributes(attrs, cardHeaderClasses)}>${content}</div>`);
+  html = html.replace(/<CardHeader\b([^>]*)\/>/g, (_match, attrs: string) =>
+    `<div${componentAttributes(attrs, cardHeaderClasses)}></div>`);
+  html = html.replace(/<CardTitle\b([^>]*)>([\s\S]*?)<\/CardTitle>/g, (_match, attrs: string, content: string) =>
+    `<div${componentAttributes(attrs, cardTitleClasses)}>${content}</div>`);
+  html = html.replace(/<CardTitle\b([^>]*)\/>/g, (_match, attrs: string) =>
+    `<div${componentAttributes(attrs, cardTitleClasses)}></div>`);
+  html = html.replace(/<CardDescription\b([^>]*)>([\s\S]*?)<\/CardDescription>/g, (_match, attrs: string, content: string) =>
+    `<div${componentAttributes(attrs, cardDescriptionClasses)}>${content}</div>`);
+  html = html.replace(/<CardDescription\b([^>]*)\/>/g, (_match, attrs: string) =>
+    `<div${componentAttributes(attrs, cardDescriptionClasses)}></div>`);
+  html = html.replace(/<CardContent\b([^>]*)>([\s\S]*?)<\/CardContent>/g, (_match, attrs: string, content: string) =>
+    `<div${componentAttributes(attrs, cardContentClasses)}>${content}</div>`);
+  html = html.replace(/<CardContent\b([^>]*)\/>/g, (_match, attrs: string) =>
+    `<div${componentAttributes(attrs, cardContentClasses)}></div>`);
+  html = html.replace(/<CardFooter\b([^>]*)>([\s\S]*?)<\/CardFooter>/g, (_match, attrs: string, content: string) =>
+    `<div${componentAttributes(attrs, cardFooterClasses)}>${content}</div>`);
+  html = html.replace(/<CardFooter\b([^>]*)\/>/g, (_match, attrs: string) =>
+    `<div${componentAttributes(attrs, cardFooterClasses)}></div>`);
+  html = html.replace(/<Skeleton\b([^>]*)\/>/g, (_match, attrs: string) =>
+    `<div${componentAttributes(attrs, skeletonClasses)}></div>`);
   html = html.replace(/<Input\b([^>]*)\/>/g, (_match, attrs: string) =>
     `<input${componentAttributes(attrs, inputClasses)} />`);
   html = html.replace(/<Label\b([^>]*)>([\s\S]*?)<\/Label>/g, (_match, attrs: string, content: string) =>
@@ -500,10 +553,85 @@ function expandUIComponent(fullMatch: string, componentName: string): string | n
 }
 
 /**
+ * Collect all lucide-react icon names from the page source, iconResolver.ts,
+ * and all component files in src/components/.
+ */
+function collectIconNames(rawContent: string, appDir?: string): Set<string> {
+  const iconNames = new Set<string>();
+
+  // Parse imports from the page's raw content
+  const importRegex = /import\s+\{([^}]+)\}\s+from\s+['"]lucide-react['"]/g;
+  let match: RegExpExecArray | null;
+  while ((match = importRegex.exec(rawContent)) !== null) {
+    const names = match[1].split(',').map(n => n.trim().split(/\s+as\s+/)[0]);
+    names.forEach(n => { if (n && n !== 'type' && n !== 'LucideIcon' && /^[A-Z]/.test(n)) iconNames.add(n); });
+  }
+
+  if (appDir) {
+    // Check iconResolver.ts for ICON_MAP
+    const resolverPath = join(appDir, 'src', 'lib', 'iconResolver.ts');
+    if (existsSync(resolverPath)) {
+      const resolverContent = readFileSync(resolverPath, 'utf-8');
+      const mapMatch = resolverContent.match(/ICON_MAP[^{]*\{([^}]+)\}/);
+      if (mapMatch) {
+        const names = mapMatch[1].match(/\b([A-Z]\w+)\b/g);
+        if (names) names.forEach(n => iconNames.add(n));
+      }
+    }
+
+    // Scan all component files for lucide-react imports
+    const componentsDir = join(appDir, 'src', 'components');
+    if (existsSync(componentsDir)) {
+      const files = getTSXFiles(componentsDir);
+      for (const filePath of files) {
+        const content = readFileSync(filePath, 'utf-8');
+        let impMatch: RegExpExecArray | null;
+ const impRegex = /import\s+\{([^}]+)\}\s+from\s+['"]lucide-react['"]/g;
+        while ((impMatch = impRegex.exec(content)) !== null) {
+          const names = impMatch[1].split(',').map(n => n.trim().split(/\s+as\s+/)[0]);
+          names.forEach(n => { if (n && n !== 'type' && n !== 'LucideIcon' && /^[A-Z]/.test(n)) iconNames.add(n); });
+        }
+      }
+    }
+  }
+
+  return iconNames;
+}
+
+/**
+ * Replace lucide-react icon components with placeholder spans.
+ * <Sparkles className="h-3.5 w-3.5" /> → <span class="icon h-3.5 w-3.5" data-icon="sparkles"></span>
+ */
+function replaceIconComponents(html: string, rawContent: string, appDir?: string): string {
+  const iconNames = collectIconNames(rawContent, appDir);
+
+  for (const iconName of iconNames) {
+    // Match <IconName className="..." /> or <IconName class="..." />
+    const iconRegex = new RegExp(`<${iconName}\\b([^>]*?)\\s*/?>`, 'g');
+    html = html.replace(iconRegex, (_match, attrs: string) => {
+      const classMatch = attrs.match(/(?:className|class)=["']([^"']*)['"]/);
+      const classAttr = classMatch ? classMatch[1] : '';
+      const otherAttrs = attrs.replace(/(?:className|class)=["'][^"']*['"]/g, '').trim();
+      const otherAttrStr = otherAttrs ? ` ${otherAttrs}` : '';
+      return `<span class="icon ${classAttr}"${otherAttrStr} data-icon="${iconName.toLowerCase()}"></span>`;
+    });
+
+    // Remove closing tags for non-self-closing usage
+    html = html.replace(new RegExp(`</${iconName}>`, 'g'), '');
+  }
+
+  return html;
+}
+
+/**
  * Convert React JSX to semantic HTML.
  * Expects component.content to already be the JSX body (extracted by parser).
  */
-export function convertJSXToHTML(component: PageComponent, appDir?: string): string {
+export function convertJSXToHTML(
+  component: PageComponent,
+  appDir?: string,
+  translations?: Record<string, unknown> | null,
+): string {
   const jsxContent = component.content;
 
   // If no JSX content was extracted, create basic HTML
@@ -513,7 +641,14 @@ export function convertJSXToHTML(component: PageComponent, appDir?: string): str
 
   let html = jsxContent;
 
-  html = html.replace(/\s+on(?:Click|Change|Submit|CheckedChange)=\{(?:[^{}]|\{[^{}]*\})*\}/g, '');
+  // Convert React event handlers to Alpine.js @click/@change/@submit
+  html = convertEventHandlersToAlpine(html);
+
+  // Strip remaining event handlers (onError, onLoad, etc.)
+  html = html.replace(/\s+on[A-Z]\w+=\{(?:[^{}]|\{[^{}]*\})*\}/g, '');
+
+  // Resolve i18n translation keys: {t('key.path')} → "English text"
+  html = replaceTranslationExpressions(html, translations ?? null);
 
   // Convert UI components to HTML elements
   html = convertUIComponentsToHTML(html);
@@ -523,12 +658,24 @@ export function convertJSXToHTML(component: PageComponent, appDir?: string): str
     html = expandCustomComponents(html, appDir);
   }
 
+  // Replace lucide-react icons with placeholder spans
+  html = replaceIconComponents(html, component.rawContent, appDir);
+
   html = expandInlineArrayMapExpressions(html);
 
   // Expand {arr.map((item) => ( <tpl/> ))} by reading `const arr = [...]`
   // from the raw source and cloning the template per item.
   if (component.rawContent) {
     html = expandMapExpressions(html, component.rawContent);
+  }
+
+  // Convert hook-based dynamic data to Alpine.js (x-for, x-show, x-data)
+  if (appDir && component.rawContent) {
+    html = processAlpineConversion(html, component.rawContent, appDir, translations ?? null);
+  }
+
+  // Resolve static ternary expressions from useState defaults
+  if (component.rawContent) {
     html = renderStaticExpressions(html, component.rawContent);
   }
 
@@ -544,9 +691,10 @@ export function convertJSXToHTML(component: PageComponent, appDir?: string): str
   html = html.replace(/className=/g, 'class=');
 
   // Handle common dynamic attribute patterns BEFORE stripping braces
-  html = html.replace(/src=\{[^}]*\}/g, 'src="#"');
-  html = html.replace(/href=\{[^}]*\}/g, 'href="#"');
-  html = html.replace(/to=\{[^}]*\}/g, 'href="#"');
+  // Skip Alpine.js bound attributes (:src, :href) which use double quotes
+  html = html.replace(/(?<![":])src=\{[^}]*\}/g, 'src="#"');
+  html = html.replace(/(?<![":])href=\{[^}]*\}/g, 'href="#"');
+  html = html.replace(/(?<![":])to=\{[^}]*\}/g, 'href="#"');
 
   // Handle form input dynamic attributes with appropriate defaults
   html = html.replace(/value=\{[^}]*\}/g, 'value=""');
@@ -563,13 +711,16 @@ export function convertJSXToHTML(component: PageComponent, appDir?: string): str
   html = stripBracedExpressions(html);
 
   // Now clean attributes left with empty/dangling values
-  html = html.replace(/\s+(key|style|width|height|onClick|onChange|onSubmit|ref)=(?=\s|>|\/)/g, '');
-  html = html.replace(/\s+(key|style|width|height|onClick|onChange|onSubmit|ref)=""/g, '');
+  // Preserve Alpine.js attributes (x-text, x-show, x-for, x-data, x-if, @click, :bind)
+  html = html.replace(/\s+(key|style|width|height|on[A-Za-z]+)=(?=\s|>|\/)/g, '');
+  html = html.replace(/\s+(key|style|width|height|on[A-Za-z]+)=""/g, '');
 
   // Remove dangling map/iteration scaffolding left after brace removal
-  // e.g. "(action, i) => (" or ")) " outside tags
+  // e.g. "(action, i) => (", "))", or ")}" outside tags
   html = html.replace(/\(\s*[a-zA-Z_][\w,\s]*\)\s*=>\s*\(/g, '');
-  html = html.replace(/\)\s*\)/g, '');
+  html = html.replace(/\s*\)\s*\)\s*/g, ' ');
+  html = html.replace(/\s*\)\s*\}\s*/g, ' ');
+  html = html.replace(/\s*\}\s*\}\s*/g, ' ');
 
   html = html.replace(/<[a-z]\.[A-Za-z][\w.]*\b[^>]*\/?\s*>/g, '');
 
@@ -580,6 +731,13 @@ export function convertJSXToHTML(component: PageComponent, appDir?: string): str
       ? `<${tag}${attrs} />`
       : `<${tag}${attrs}></${tag}>`;
   });
+
+  // Remove Helmet blocks with their meta/title children
+  html = html.replace(/<Helmet\b[^>]*>[\s\S]*?<\/Helmet>/g, '');
+
+  // Strip any remaining unresolved PascalCase component/icon tags while keeping their children
+  html = html.replace(/<([A-Z][a-zA-Z0-9]*)[^>]*>([\s\S]*?)<\/\1>/g, '$2');
+  html = html.replace(/<([A-Z][a-zA-Z0-9]*)[^>]*\/>/g, '');
 
   // Collapse excessive whitespace but preserve single spaces
   html = html.replace(/\s+/g, ' ').trim();
@@ -616,9 +774,13 @@ export function extractTextFromJSX(content: string): string {
 export function convertPageToRecord(
   component: PageComponent,
   siteId: number,
-  appDir?: string
+  appDir?: string,
+  translations?: Record<string, unknown> | null,
 ): ConvertedPage {
-  const html = convertJSXToHTML(component, appDir);
+  // Extract SEO data from <Helmet> — use rawContent to find Helmet in any return block
+  const seo: SeoData = extractSeoFromHelmet(component.rawContent || component.content, translations ?? null);
+
+  const html = convertJSXToHTML(component, appDir, translations);
   const requiresLogin = component.isAuthenticated === true ||
     (component.name !== 'NotFound' && component.name !== 'Index' && component.name !== '__root' && component.name !== 'auth');
 
@@ -628,6 +790,12 @@ export function convertPageToRecord(
     route: component.route || `/${component.name.toLowerCase()}`,
     html,
     requiresLogin,
+    meta_title: seo.meta_title,
+    meta_description: seo.meta_description,
+    meta_og_type: seo.meta_og_type,
+    meta_og_image: seo.meta_og_image,
+    meta_twitter_card: seo.meta_twitter_card,
+    meta_twitter_title: seo.meta_twitter_title,
   };
 }
 

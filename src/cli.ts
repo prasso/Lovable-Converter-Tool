@@ -6,6 +6,7 @@ import { convertPageToRecord } from './converter.js';
 import { generateSQL, generateSQLWithTransaction } from './sqlGenerator.js';
 import { generateShadcnThemeCSS } from './themeCss.js';
 import { writeFile, pathExists } from './utils/fileUtils.js';
+import { loadTranslations } from './i18nResolver.js';
 
 interface CLIOptions {
   folder: string;
@@ -80,9 +81,15 @@ async function convertCommand(options: CLIOptions) {
     console.log(`   - ${page.name} (${page.route})`);
   });
 
+  // Load i18n translations (if available)
+  const translations = loadTranslations(folder);
+  if (translations) {
+    console.log('🌐 Found i18n translations — resolving t() calls');
+  }
+
   // Convert pages (extracts JSX and cleans it into HTML)
   console.log('🔄 Converting to database records...');
-  const convertedPages = pages.map(page => convertPageToRecord(page, siteId, folder));
+  const convertedPages = pages.map(page => convertPageToRecord(page, siteId, folder, translations));
 
   // Generate SQL
   console.log('💾 Generating SQL...');
